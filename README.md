@@ -15,9 +15,11 @@ which is then compared with a transformed model to determine which yields superi
 - Ames Housing Dataset Regression Diagnostic.Rmd (main analysis file)
 - AmesHousing.csv (dataset)
 - AmesHousingdatasetDocumentation.txt (Meta Data File)
+- Ames-Housing-Dataset-Regression-Diagnostic.pdf (Final rendered report for easy viewing)
 
 ## How to Run
-Open the Rmd file in RStudio and click Knit.
+Open the Rmd file in RStudio and Install required packages if needed.
+Click Knit to PDF.
 
 ## Tools and Packages Used
 - R
