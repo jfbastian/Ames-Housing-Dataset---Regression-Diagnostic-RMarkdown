@@ -1,0 +1,348 @@
+---
+title: "Ames Housing Dataset Regression Diagnostics"
+author: "Jennifer Flora Bastian"
+date: "2026-02-21"
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Load Libraries
+
+```{r }
+#Load Libraries
+library(dplyr)
+library(ggplot2)
+library(scales)
+library(corrplot)
+library(RColorBrewer)
+library(car)
+library(leaps)
+```
+## Load the Dataset
+```{r }
+#Import the dataset
+housing_dataset <- read.csv("AmesHousing.csv")
+rownames(housing_dataset) <-housing_dataset$Order
+#Remove column Order
+housing_dataset <- housing_dataset %>% 
+  select(-Order)
+```
+## Exploratory Data Analysis
+The Ames Housing dataset contains 2,930 homes and 81 different variables. It includes numeric information like sale price, above-ground living space (measured in square feet), and total basement area (also in square feet), plus categorical information such as the home's architectural style and the overall quality of materials and finishes.
+
+```{r }
+#Data structure
+str(housing_dataset)
+#View summary information
+summary(housing_dataset)
+```
+
+Looking at the sale price histogram tells an interesting story. Most homes are affordable to moderately priced, but there are a few expensive outliers pulling the distribution to the right. The cheapest property sold for $12,789 while the priciest hit $755,000. The average comes out to $180,796, though the typical home (median) is closer to $160,000 showing those high-end sales are really pushing up the average.
+
+```{r }
+#Histogram of SalePrice
+ggplot(housing_dataset, aes(x = SalePrice)) +
+  geom_histogram(binwidth = 20000, fill = "orange", color = "black") +
+  labs(title = "Histogram of House Sale Prices",
+       x = "Sale Price ($)", y = "Count") +
+  scale_x_continuous(labels = dollar) + 
+  theme_classic()
+```
+
+## Data Preparation for Modelling
+Prior to fitting the regression model, the dataset was prepared by handling missing values in the numeric variables. All numeric columns were identified, and any missing values such as those in Lot.Frontage, Alley, and Mas.Vnr.Area were replaced with the mean of the respective variable.
+
+```{r }
+#Prepare the dataset for modeling
+#By imputing missing values with the variable's mean value
+#Check for missing values
+missing_values <- colSums(is.na(housing_dataset))
+print(missing_values[missing_values > 0])
+
+#Create a copy of the dataset
+clean_housing_dataset <- housing_dataset
+#List of numeric variables names
+numeric_variables <- names(clean_housing_dataset)[sapply(clean_housing_dataset, is.numeric)]
+
+#Fill missing values in each numeric variable
+for(column_name in numeric_variables) {
+  #Check if there are any missing values
+  if(any(is.na(clean_housing_dataset[[column_name]]))) {
+    #Calculate the mean
+    column_mean <- mean(clean_housing_dataset[[column_name]], na.rm = TRUE)
+    #Replace missing values with the mean
+    clean_housing_dataset[[column_name]][is.na(clean_housing_dataset[[column_name]])] <- column_mean
+  }
+}
+```
+This approach ensures the dataset is complete and suitable for modeling, without removing observations or introducing bias from excluding data. After imputation, all numeric variables contain no missing values, enabling reliable regression analysis.
+
+## Correlation matrix of Numeric Variables
+A correlation matrix was created using the cor() function for selected numeric variables in the Ames Housing dataset to examine the relationships between quantitative features, including sale price and size-related measurements like Lot.Frontage, Gr.Liv.Area, Garage.Area, and others.
+
+```{r }
+#Correlation matrix of the numeric values
+#Select only quantitative/numeric variables
+quantitative_vars <- c("Lot.Frontage", "Lot.Area", "Mas.Vnr.Area", 
+                       "BsmtFin.SF.1", "BsmtFin.SF.2", "Bsmt.Unf.SF", "Total.Bsmt.SF",
+                       "X1st.Flr.SF", "X2nd.Flr.SF", "Low.Qual.Fin.SF", "Gr.Liv.Area",
+                       "Bsmt.Full.Bath", "Bsmt.Half.Bath", "Full.Bath", "Half.Bath",
+                       "Bedroom.AbvGr", "Kitchen.AbvGr", "TotRms.AbvGrd", "Fireplaces",
+                       "Garage.Cars", "Garage.Area", "Wood.Deck.SF", "Open.Porch.SF",
+                       "Enclosed.Porch", "X3Ssn.Porch", "Screen.Porch", "Pool.Area",
+                       "Misc.Val", "SalePrice")
+
+numeric_values <- clean_housing_dataset[, names(clean_housing_dataset) %in% quantitative_vars]
+
+#Compute correlation matrix
+cors <- cor(numeric_values, use = "pairwise")
+
+#Create correlation metix plot
+corrplot(cors, method = "color", type = "upper", 
+         col = brewer.pal(n=8, name='RdYlBu'),
+         tl.cex = 0.4, tl.col = "black", 
+         tl.srt = 45,number.cex = 0.5)
+```
+
+Positive correlations are shown in shades of blue, with darker blue indicating stronger positive relationships (values closer to +1). Negative correlations appear in shades of red/orange, with darker reds indicating stronger negative relationships (values closer to -1). Colors near white/yellow indicate weak or no correlation (values near 0).
+
+Features like above-ground living area (Gr.Liv.Area) correlate strongly and positively with sale price, so expansive homes usually command higher market values. Likewise, basement measurements such as total basement square footage (Total.Bsmt.SF) also correlate positively with sale price, which suggests that finished basement space adds to a home's value. On the flip side, some features like pool area or miscellaneous value show hardly any correlation with sale price or other variables.
+High correlations between predictors (for example, TotRms.AbvGrd and Gr.Liv.Area, as larger houses naturally have more rooms) warn about possible multicollinearity, which should be considered when selecting variables for regression models.
+
+The plot helps identify important predictors for modeling and highlights potential multicollinearity among variables, guiding better feature selection for regression analysis.
+
+## Scatter Plots of Continous Variable vs SalePrice
+I created three scatter plots to examine how sale price relates to different continuous variables in the Ames Housing dataset:
+
+```{r }
+#select only continuous variables
+continuous_vars <- clean_housing_dataset[, c("SalePrice","Gr.Liv.Area","Garage.Area",
+  "Total.Bsmt.SF","Mas.Vnr.Area","BsmtFin.SF.1","Wood.Deck.SF","Open.Porch.SF",
+  "X2nd.Flr.SF","Bsmt.Unf.SF","Enclosed.Porch","Screen.Porch","Low.Qual.Fin.SF",
+  "X3Ssn.Porch","Misc.Val","BsmtFin.SF.2")]
+
+cors_continous_variables <- cor(continuous_vars, use = "pairwise")
+
+#Show correlation with sales price for continous variables only
+saleprice_cors <- cors_continous_variables[, "SalePrice"]
+saleprice_cors_continous <- sort(abs(saleprice_cors), decreasing = TRUE)
+print(saleprice_cors_continous)
+
+#Find variables with highest, lowest, and ~0.5 correlation with SalePrice
+#Remove SalesPrice itself
+cors_with_price <- saleprice_cors[names(saleprice_cors) != "SalePrice"]
+
+#Highest correlation
+highest_var <- names(which.max(abs(cors_with_price)))
+highest_cor <- cors_with_price[highest_var]
+
+#Lowest correlation
+lowest_var <- names(which.min(abs(cors_with_price)))
+lowest_cor <- cors_with_price[lowest_var]
+
+#Closest to 0.5
+closest_05_var <- names(which.min(abs(abs(cors_with_price) - 0.5)))
+closest_05_cor <- cors_with_price[closest_05_var]
+
+#Create scatter plots
+par(mfrow = c(1, 3))
+
+#Scatter plot for the Gr.Liv.Area vs SalePrice
+plot(clean_housing_dataset[[highest_var]], clean_housing_dataset$SalePrice,
+     xlab = highest_var, ylab = "SalePrice",
+     main = paste("Highest Cor:", round(highest_cor, 3)),
+     pch = 16, col = rgb(0.5, 0, 0.5, 0.3))
+abline(lm(SalePrice ~ clean_housing_dataset[[highest_var]], data = clean_housing_dataset), 
+       col = "red", lwd = 2)
+
+#Scatter plot for the BsmtFin.SF.2 vs SalePrice
+plot(clean_housing_dataset[[lowest_var]], clean_housing_dataset$SalePrice,
+     xlab = lowest_var, ylab = "SalePrice",
+     main = paste("Lowest Cor:", round(lowest_cor, 3)),
+     pch = 16, col = rgb(0, 1, 0, 0.3))
+abline(lm(SalePrice ~ clean_housing_dataset[[lowest_var]], data = clean_housing_dataset), 
+       col = "red", lwd = 2)
+
+#Scatter plot for the Mas.Vnr.Area vs SalePrice
+plot(clean_housing_dataset[[closest_05_var]], clean_housing_dataset$SalePrice,
+     xlab = closest_05_var, ylab = "SalePrice",
+     main = paste("~0.5 Cor:", round(closest_05_cor, 3)),
+     pch = 16, col = rgb(1, 0, 0, 0.3))
+abline(lm(SalePrice ~ clean_housing_dataset[[closest_05_var]], data = clean_housing_dataset), 
+       col = "red", lwd = 2)
+
+par(mfrow = c(1, 1))
+```
+Highest Correlation: Gr.Liv.Area (r = 0.707) The scatter plot shows a strong positive linear relationship between main-level living area (square feet) and sale price. Generally speaking, bigger homes cost more, and you can see the data points forming an upward pattern. The red regression line makes this clear positive relationship easy to spot.
+
+Lowest Correlation: BsmtFin.SF.2 (r = 0.006) When looking at the second type of finished basement area, the scatter plot shows practically no connection to sale price. The points are all over the place with no discernible pattern, and the regression line is basically horizontal, which matches up with the correlation being almost zero.
+
+Moderate Correlation: Mas.Vnr.Area (r = 0.506) The plot comparing masonry veneer area to sale price shows a moderate positive correlation. There's a general upward trend indicating that more veneer area typically means higher prices, but the points are more spread out than with above-ground living area. This tells me that while veneer area matters, other factors are also playing a role in determining sale price.
+
+These plots demonstrate how correlation values correspond to visual patterns: strong correlations align with clear linear trends; weak correlations appear as random scatter, and moderate correlations show a trend with notable variability. This visual insight helps prioritize variables for regression modeling based on their explanatory power.
+
+## Multi Linear Regression Model using Continuous Variables
+A multiple linear regression model was built to predict residential sale prices, utilizing four continuous variables with substantial connections to price: living area above ground, garage area, basement area, and masonry veneer area.
+
+```{r }
+#Fit multiple liner regression model
+#Use 4 continous variables based on high correlations with SalesPrice
+model1 <- lm(SalePrice ~ Gr.Liv.Area + Garage.Area + Total.Bsmt.SF + Mas.Vnr.Area,
+             data = clean_housing_dataset)
+
+#View model summary
+summary(model1)
+```
+
+The model accounts for about 69.4% of the variation in sale prices (adjusted R2 = 0.694), with all predictors showing positive relationships and being statistically significant. For example, larger living areas are associated with higher sale prices. The residual standard error of roughly $44,210 indicates a moderate level of uncertainty in the predictions. Overall, the model captures key size-related factors affecting home prices, though some variation remains unexplained, suggesting that other factors also play a role.
+
+The last column in the model summary displays the p-values for each coefficient. Every single p- value is incredibly small (under 2e-16), which shows really strong statistical significance. This demonstrates that each of the four variables genuinely contributes to predicting sale price when the others are held constant. The high t-values back this up too, showing these predictors have a strong influence on home prices, and there's virtually no chance their coefficients are zero just by random luck.
+
+The resulting model equation is:
+Predicted SalePrice = −18,798.74 + 63.80(Gr.Liv.Area) + 97.17(Garage.Area) + 49.11(Total.Bsmt.SF) + 62.15(Mas.Vnr.Area)
+
+Each variable represents area measured in square ft. The intercept (−$18,798.74) serves as a baseline with no real-world meaning. With all else fixed, each square foot adds: $63.80 (living area), $97.17 (garage), $49.11 (basement), or $62.15 (masonry veneer). Simply put: larger, better- appointed homes fetch higher prices.
+
+As noted, all predictors are statistically significant and positively related to sale price, and the model explains roughly 69.4% of the variation in home sale prices. This highlights the strong effect of size- related features while acknowledging that other factors also influence housing values.
+When I use the plot() function, it creates four standard diagnostic plots that help me check whether the linear regression model meets its key assumptions.
+
+```{r }
+#Plot regression model
+#Review diagnostics plots
+#Residual vs Fitted - Linearity
+#Normal Q-Q plot - Normality
+#Scale - Location - homoscedasticity (constant variance)
+#Residuals vs Leverage (Unusual observations)
+par(mfrow = c(2,2))
+plot(model1)
+```
+
+Residuals vs Fitted (Linearity): Figure examines the linearity assumption by displaying how residuals behave relative to fitted values. A well-specified linear model would show random dispersion around zero. Here, the residuals largely concentrate around the zero line, suggesting the linear framework captures the relationship reasonably well. That said, I notice a slight upward trend and the residuals spread out more when the fitted values get higher. This hints at some mild nonlinearity and heteroscedasticity - basically, the model isn't as accurate when predicting really expensive homes. The labeled points (e.g., 2182, 2181, and 1499) correspond to properties with unusually large residuals, showing that their sale prices are not well predicted by the model. These homes, likely at the high end of the price range, highlight where the model is less accurate.
+
+Scale–Location Plot (Homoscedasticity): This plot checks if the residuals have a consistent spread across all predicted sale prices. Ideally, the points should form a flat line with equal scatter. In my model, the spread of residuals gets a bit wider for higher-priced homes, which means the model’s prediction errors are larger for expensive properties. The points labeled 2182, 2181, and 1499 are individual homes with unusually large errors, showing where the model doesn’t predict as well.
+
+Residuals vs Leverage (Influential Observations): This plot shows which homes have a strong influence on the regression model. As mentioned above, a few points, like 2182, 2181, and 1499, have high leverage and large residuals, meaning they could disproportionately affect the model’s results. These influential homes are likely to have very expensive or unusual properties. While they don’t automatically make the model invalid.
+
+```{r }
+#Component + Residuals linearity
+crPlots(model = model1)
+```
+In the Component + Residuals plots, each predictor shows how it relates to the residuals after accounting for other variables. The pink line shows a smooth trend, and the blue line represents the linear relationship. For most variables, the pink line follows the blue line closely, meaning the linear assumption is mostly fine. For Total.Bsmt.SF, the pink line curves up slightly at higher values, which suggests a small departure from linearity basements that are very large have a slightly stronger effect on sale price than the straight-line model predicts. Overall, the model works well, but there’s little nonlinearity for some predictors.
+
+```{r }
+#Q-Q plot normality using car library
+qqPlot(model1, labels = row.names(clean_housing_dataset), simulate = TRUE, main = 'Q-Q Plot')
+```
+Normal Q–Q Plot (Normality): Figure 6's Q–Q plot evaluates residual normality by contrasting the observed residuals with expected values under a perfect normal distribution. Most of the points sit pretty close to the reference line, which tells me the residuals are mostly normally distributed. But there are some points that stray off at the ends - specifically observations 2182, 2181, and 1499 that are labeled. These outliers show that the model doesn't fit perfectly for homes with extremely high or extremely low sale prices, causing a slight departure from normality at those extremes. The shaded area (Figure 8) represents a 95% confidence interval for where points would fall if the residuals were perfectly normal. Points outside this area highlight observations with unusually large residuals that the model does not predict well.
+
+```{r }
+#Spread-Level plot for fit - homoscedasticity
+spreadLevelPlot(model1)
+```
+The spread–level plot shows a pink line that curve upward slightly, meaning that the spread of residuals gets larger as predicted sale prices increase. The blue line represents what the spread would look like if the variance were constant. What we want to see is a random scattering of points around a horizontal line. The pink line shows the general trend to help us see whether there’s any patterns in the residuals. The upward trend of the pink line confirms some heteroscedasticity, so prediction errors are bigger for more expensive homes. This matches what we saw in the Scale– Location plot and shows that the model is less accurate for high-priced houses.
+
+In a nutshell, diagnostic plots show that the regression model works well and mostly satisfies the assumptions of linear regression. However, there is some mild heteroscedasticity, a little deviation from normality in extreme values, and a few influential data points. These observations suggest that using transformations (like taking the log of SalePrice) or including more variables could help improve the model’s accuracy.
+
+## Check Model for Multicollinearity
+To evaluate multicollinearity in the regression model, Variance Inflation Factors (VIFs) were computed for each predictor
+
+```{r }
+#Check model for multicollinearity
+vif(model1)
+```
+The VIF values I calculated are 1.48 for above-ground living area, 1.51 for garage area, 1.48 for total basement square footage, and 1.31 for masonry veneer area. These numbers are all way below the usual warning signs - typically a VIF above 5 suggests moderate multicollinearity issues, and above 10 means serious problems. Since mine are so low, there's no multicollinearity problem to worry about in this model. This means my predictor variables aren't too closely related to each other, so the coefficients I'm getting are solid and trustworthy. If I had found multicollinearity, I would've needed to either drop some variables or combine the ones that were too similar.
+
+## Identifying Outliers
+When examining the model for outliers, certain homes are identified as having unusually large residuals, meaning their actual sale prices differ greatly from the model’s predictions. The most extreme cases are homes 1499, 2181, and 2182, which have large negative residuals, indicating that the model overestimates their prices. Other outliers, such as 1761, 45, and 1064, show large positive or negative residuals. The extremely small p-values suggest that these differences are statistically significant. These unusual or extreme properties can have a strong influence on the model and identifying them helps determine whether further investigation or model adjustments are needed to improve predictions.
+
+```{r }
+#Check model for outliers
+#Outliers
+outlierTest(model = model1)
+```
+The hat values plot shows which homes have a high influence on the regression model. The two red dashed lines are thresholds: points below the first line are fine, points between the two lines might need a closer look, and points above the second line should be checked. In this plot, homes 1499, 1850, and 2181 are labeled because they have high leverage. This doesn’t mean they are causing problems for the model, but they are unusual, so it’s important to understand why they stand out.
+
+```{r }
+#High leverage observation
+hat.plot <- function(model1) {
+  p <- length(coefficients(model1))
+  n <- length(fitted(model1))
+  plot(hatvalues(model1), main = "Index Plot of Hat Values")
+  abline(h = c(2,3)*p/n, col = "red", lty = 2)
+  identify(1:n, hatvalues(model1), names(hatvalues(model1)))
+}
+hat.plot(model1)
+```
+The Cook’s distance plot shows which homes might have a strong influence on the model. Points above the red dashed line are considered potentially influential. In my plot, homes 1499, 2181, and 2182 stand out. Home 1499 is both high-leverage and influential, meaning it could strongly affect the model’s results. Homes 2181 and 2182 are also influential. These points don’t necessarily mean the model is wrong, but they are unusual cases that should be looked at more closely to understand why they differ from the rest of the homes.
+
+```{r }
+#Influential Observations
+cutoff <- 4/(nrow(clean_housing_dataset) - length(model1$coefficients - 2))
+plot(model1, which = 4, cook.levels = cutoff)
+abline(h = cutoff, lty = 2, col = "red")
+```
+
+##  Transformation
+
+The use of powerTransform function shows how we can change SalePrice to make the model work better. It estimated a power of about 0 (0.0076 rounded to 0), which means a log transformation would be ideal. This makes sense because the original SalePrice is skewed and not perfectly normal. I used a square root transformation instead, which is a smaller change but still helpful. The tests show that using no transformation is not good (very small p-value), while a log transformation would work well (large p-value).
+
+```{r }
+#View distribution of response variable
+hist(clean_housing_dataset$SalePrice)
+
+#Use power transform function to determine transformation
+summary(powerTransform(clean_housing_dataset$SalePrice))
+
+#Apply the transformation and review the result
+clean_housing_dataset$SalePrice_sqrt <- sqrt(clean_housing_dataset$SalePrice)
+hist(clean_housing_dataset$SalePrice_sqrt)
+```
+
+In simple terms, transforming SalePrice helps make the residuals more normally distributed and reduces issues like uneven spread of errors. Applying the square root transformation improves the model, although a log transformation might offer slightly better results. After taking the square root, the model fits a little better: the adjusted R2 rises to 0.705, meaning it now explains about 70.5% of the variation in home prices. All four predictors remain highly significant, with larger living areas, garages, basements, and masonry veneer areas continuing to increase home prices. The residual standard error on the transformed scale is 47.1, indicating that predictions are somewhat more consistent. Overall, the transformation reduced large errors for expensive homes and made the model more reliable while preserving the key relationships.
+
+```{r }
+#model2 square root transformation
+model2 <- lm(SalePrice_sqrt ~ Gr.Liv.Area + Garage.Area + Total.Bsmt.SF + Mas.Vnr.Area,
+                data = clean_housing_dataset)
+summary(model2)
+```
+##  Use All Subset Regression to Identify the Best Model
+
+The all subsets regression plot displays all possible combinations of the four predictor variables along with their adjusted R2 values. The black shading indicates the models that achieve the highest adjusted R2 for each number of predictors.
+
+```{r }
+#Best Subset
+leaps <- regsubsets(SalePrice ~ Gr.Liv.Area + Garage.Area + Total.Bsmt.SF + Mas.Vnr.Area,
+                     data = clean_housing_dataset, nbest = 4)
+
+plot(leaps, scale = "adjr2")
+```
+Based on the plot, the four-variable model incorporating Gr.Liv.Area, Garage.Area, Total.Bsmt.SF, and masonry veneer area demonstrates the strongest performance, achieving an adjusted R2 of approximately 0.69. This means it accounts for roughly 69% of the differences we see in sale prices. When I tested models with fewer variables, they had lower adjusted R2 values, so they weren't as good at explaining price variations. This tells me the four-variable model is the winner since it gives the most accurate and complete picture of what drives home prices.
+
+The model equation is:
+Predicted SalePrice = −18,798.74 + 63.80(Gr.Liv.Area) + 97.17(Garage.Area) + 49.11(Total.Bsmt.SF) + 62.15(Mas.Vnr.Area).
+ 
+This shows that each of the four area-related variables has a positive effect on sale price, and including all of them gives the most reliable predictions.
+
+```{r }
+#Review Results
+summary(leaps)
+```
+
+##  Compare the Preferred Model
+The two models use an identical set of four predictor variables: living space above ground, garage square footage, total basement area, and masonry veneer coverage. Where they differ is in their target outcome what each model aims to forecast. The first model predicts the actual sale price as- is, while the second model predicts the square root of the sale price. I used the square root transformation in the second model to make the data less skewed and get a better-fitting model overall.
+
+• Adjusted R-squared: model1 explains about 69.4% of the variation in SalePrice, while model2 explains slightly more, 70.5%, showing a small improvement in overall fit.
+
+• Residuals: model1 has a much larger residual standard error (about 44,210), reflecting the original scale of sale prices, and errors increase with high-priced homes. model2’s residual standard error is 47.1 on the transformed scale, showing that prediction errors are more consistent across the dataset.
+
+• Significance of predictors: Both models show all predictors are highly significant, and the direction of the effect (positive relationship with sale price) stays the same.
+
+model2 is slightly better because the square root transformation reduces skewness, stabilizes variance (reduces heteroscedasticity), and makes the residuals closer to normal. This improves the reliability of predictions, especially for higher-priced homes, even though the set of predictors hasn’t changed. model1 works fine, but model2 provides a more robust and statistically sound fit.
+
+
+
